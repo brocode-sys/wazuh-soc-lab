@@ -1,0 +1,154 @@
+
+---
+- name: Configure Wazuh failed-login triage lab
+  hosts: wazuh
+  become: true
+
+  vars:
+    lab_dir: /opt/lab
+    lab_log_dir: /var/log/lab
+    synthetic_log: /var/log/lab/auth_synthetic.log
+    wazuh_install_log: /var/log/wazuh-aio.log
+    wazuh_installer: /root/wazuh-install.sh
+
+  tasks:
+    - name: Install prerequisites
+      apt:
+        name:
+          - curl
+          - jq
+          - python3
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Create lab directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - "{{ lab_dir }}"
+        - "{{ lab_log_dir }}"
+
+    - name: Download Wazuh installer
+      get_url:
+        url: https://packages.wazuh.com/4.14/wazuh-install.sh
+        dest: "{{ wazuh_installer }}"
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Install Wazuh all-in-one
+      shell: |
+        bash "{{ wazuh_installer }}" -a > "{{ wazuh_install_log }}" 2>&1
+      args:
+        creates: /usr/share/wazuh-dashboard/bin/opensearch-dashboards
+      async: 3000
+      poll: 30
+
+    - name: Wait for the dashboard
+      uri:
+        url: https://localhost:443
+        validate_certs: false
+        status_code:
+          - 200
+          - 302
+          - 401
+      register: dash
+      retries: 60
+      delay: 10
+      until: dash.status in [200, 302, 401]
+
+    # Keep administrator credentials private.
+    # Configure a separate read-only trainee account before lab access.
+    - name: Ensure lab log permissions
+      file:
+        path: "{{ synthetic_log }}"
+        state: touch
+        owner: root
+        group: wazuh
+        mode: "0640"
+
+    - name: Monitor the synthetic log
+      blockinfile:
+        path: /var/ossec/etc/ossec.conf
+        insertbefore: "</ossec_config>"
+        marker: "<!-- {mark} FAILED LOGIN LAB -->"
+        block: |
+          <localfile>
+            <log_format>syslog</log_format>
+            <location>{{ synthetic_log }}</location>
+          </localfile>
+      notify: Restart Wazuh manager
+
+    - name: Apply manager configuration
+      meta: flush_handlers
+
+    - name: Wait for Wazuh manager
+      service:
+        name: wazuh-manager
+        state: started
+
+    - name: Write synthetic event generator
+      copy:
+        dest: "{{ lab_dir }}/gen_failed_logins.py"
+        owner: root
+        group: root
+        mode: "0700"
+        content: |
+          #!/usr/bin/env python3
+          import datetime
+          import time
+
+          LOG = "/var/log/lab/auth_synthetic.log"
+          HOST = "corp-web01"
+
+          def line(pid, msg):
+              ts = datetime.datetime.now().strftime("%b %e %H:%M:%S")
+              return f"{ts} {HOST} sshd[{pid}]: {msg}\n"
+
+          events = [
+              (2101, "Failed password for deploy from 10.10.10.25 port 40122 ssh2"),
+              (2101, "Failed password for deploy from 10.10.10.25 port 40122 ssh2"),
+              (2104, "Accepted password for deploy from 10.10.10.25 port 40130 ssh2"),
+          ]
+
+          for i in range(11):
+              events.append((
+                  2200 + i,
+                  f"Failed password for root from 203.0.113.77 port {51800 + i} ssh2"
+              ))
+
+          events.append((
+              2212,
+              "Accepted password for root from 203.0.113.77 port 51812 ssh2"
+          ))
+
+          with open(LOG, "a", encoding="utf-8") as f:
+              for pid, msg in events:
+                  f.write(line(pid, msg))
+                  f.flush()
+                  time.sleep(0.5)
+
+    - name: Generate synthetic events only when requested
+      command: python3 {{ lab_dir }}/gen_failed_logins.py
+      when: generate_lab_events | default(false) | bool
+
+    - name: Install restricted alert export cron job
+      cron:
+        name: publish-alerts
+        user: root
+        job: >-
+          /usr/bin/install -o root -g wazuh -m 0640
+          /var/ossec/logs/alerts/alerts.json
+          /opt/lab/alerts.json
+      when: false
+
+  handlers:
+    - name: Restart Wazuh manager
+      service:
+        name: wazuh-manager
+        state: restarted

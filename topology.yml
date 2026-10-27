@@ -1,0 +1,37 @@
+name: wazuh-soc-lab
+hosts:
+  - name: wazuh
+    base_box:
+      image: ubuntu-noble-x86_64
+      mgmt_user: ubuntu
+      mgmt_protocol: SSH
+    flavor: wazuh.server50
+  - name: analyst
+    base_box:
+      image: kali
+      mgmt_user: kali
+      mgmt_protocol: SSH
+    flavor: analyst.kali30
+routers:
+  - name: router1
+    base_box:
+      image: debian-12-x86_64
+      mgmt_user: debian
+      mgmt_protocol: SSH
+    flavor: standard.tiny
+networks:
+  - name: lab-network
+    cidr: 10.10.50.0/24
+    accessible_by_user: true
+net_mappings:
+  - host: wazuh
+    network: lab-network
+    ip: 10.10.50.10
+  - host: analyst
+    network: lab-network
+    ip: 10.10.50.20
+router_mappings:
+  - router: router1
+    network: lab-network
+    ip: 10.10.50.2
+groups: []
