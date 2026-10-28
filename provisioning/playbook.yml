@@ -1,4 +1,3 @@
-
 ---
 - name: Configure Wazuh failed-login triage lab
   hosts: wazuh
@@ -133,9 +132,8 @@
                   f.flush()
                   time.sleep(0.5)
 
-    - name: Generate synthetic events only when requested
+    - name: Generate synthetic events
       command: python3 {{ lab_dir }}/gen_failed_logins.py
-      when: generate_lab_events | default(false) | bool
 
     - name: Install restricted alert export cron job
       cron:
@@ -145,7 +143,6 @@
           /usr/bin/install -o root -g wazuh -m 0640
           /var/ossec/logs/alerts/alerts.json
           /opt/lab/alerts.json
-      when: false
 
   handlers:
     - name: Restart Wazuh manager
