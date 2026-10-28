@@ -9,7 +9,7 @@ hosts:
   - name: analyst
     base_box:
       image: kali
-      mgmt_user: kali
+      mgmt_user: debian
       mgmt_protocol: SSH
     flavor: analyst.kali30
 routers:
